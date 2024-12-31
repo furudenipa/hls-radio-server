@@ -1,0 +1,27 @@
+services:
+  goapp:
+    build: ./go-server
+    container_name: goapp
+    expose: 
+      - "8080"
+    volumes:
+      - ./radio_data:/srv/radio
+    networks:
+      - webnet
+    # ports:
+    #   - "8080:8080"  
+
+  nginx:
+    build: ./nginx
+    container_name: nginx
+    ports:
+      - "80:80"
+    depends_on:
+      - goapp
+    volumes:
+      - ./radio_data:/srv/radio
+    networks:
+      - webnet
+
+networks:
+  webnet:

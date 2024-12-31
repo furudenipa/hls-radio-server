@@ -1,0 +1,11 @@
+# contents
+/radio_data/contents/music/*/*.ts
+/radio_data/contents/voice/*/*.ts
+/radio_data/contents/music/*/*.m3u8
+/radio_data/contents/voice/*/*.m3u8
+
+# station stream
+/radio_data/stations/*/*.m3u8
+
+# env
+.env
