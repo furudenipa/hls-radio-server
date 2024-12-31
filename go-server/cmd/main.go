@@ -7,7 +7,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"web-server-project/internal/hls"
+
+	hls "github.com/furudenipa/hls-radio-server/go-server/internal/hls"
 )
 
 func main() {
