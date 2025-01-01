@@ -11,8 +11,8 @@ type StreamManager interface {
 	Stop()
 }
 
-type M3U8Manager struct {
-	stream *m3u8
+type m3u8Manager struct {
+	stream *playlist
 
 	updateChan     chan content
 	stopChan       chan struct{}
@@ -24,14 +24,14 @@ type M3U8Manager struct {
 	status Status
 }
 
-func NewStreamM3U8Manager(baseDir, streamFilePath string) *M3U8Manager {
+func NewStreamM3U8Manager(baseDir, streamFilePath string) *m3u8Manager {
 	const maxConn = 10
-	m3u8, err := NewM3U8(streamFilePath)
+	playlist, err := NewM3U8(streamFilePath)
 	if err != nil {
 		slog.Error("failed to create m3u8", "error", err)
 	}
-	return &M3U8Manager{
-		stream:         m3u8, // TODO:
+	return &m3u8Manager{
+		stream:         playlist, // TODO:
 		updateChan:     make(chan content, maxConn),
 		stopChan:       make(chan struct{}),
 		baseDir:        baseDir,
@@ -39,7 +39,7 @@ func NewStreamM3U8Manager(baseDir, streamFilePath string) *M3U8Manager {
 	}
 }
 
-func (m *M3U8Manager) Run() {
+func (m *m3u8Manager) Run() {
 	defer close(m.updateChan)
 	m.status = StatusStreaming
 	for {
@@ -56,7 +56,7 @@ func (m *M3U8Manager) Run() {
 }
 
 // idをもとにstream.m3u8を更新する
-func (m *M3U8Manager) HandleUpdate(c content) error {
+func (m *m3u8Manager) HandleUpdate(c content) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -64,10 +64,10 @@ func (m *M3U8Manager) HandleUpdate(c content) error {
 	return m.stream.SyncFromSource(sourcePath, m.streamFilePath, m.stopChan)
 }
 
-func (m *M3U8Manager) Add(c content) {
+func (m *m3u8Manager) Add(c content) {
 	m.updateChan <- c
 }
 
-func (m *M3U8Manager) Stop() {
+func (m *m3u8Manager) Stop() {
 	close(m.stopChan)
 }

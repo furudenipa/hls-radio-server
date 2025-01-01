@@ -10,25 +10,25 @@ import (
 const sleepTime = 10
 const necessaryRemainingTime = 80
 
-type DJ struct {
-	m3u8Manager   *M3U8Manager
-	L             Logic
+type dj struct {
+	manager       StreamManager
+	logic         logic
 	remainingTime int // second
 }
 
-func (d *DJ) Start() error {
-	go d.m3u8Manager.Run()
+func (d *dj) Start() error {
+	go d.manager.Run()
 	for {
 		for {
 			if d.remainingTime >= necessaryRemainingTime {
 				break
 			}
-			content, err := d.L.Choice()
+			content, err := d.logic.Choice()
 			if err != nil {
 				return err
 			}
 			d.remainingTime += content.length
-			d.m3u8Manager.Add(content)
+			d.manager.Add(content)
 		}
 		slog.Info("DJ: ", "remainingTime", d.remainingTime)
 		time.Sleep(sleepTime * time.Second)
@@ -36,15 +36,15 @@ func (d *DJ) Start() error {
 	}
 }
 
-type Logic interface {
+type logic interface {
 	Choice() (content, error)
 }
 
-type RandomLogic struct {
+type randomLogic struct {
 	contents []content
 }
 
-func (rl RandomLogic) Choice() (content, error) {
+func (rl randomLogic) Choice() (content, error) {
 	if len(rl.contents) == 0 {
 		return content{}, fmt.Errorf("contents is empty")
 	}

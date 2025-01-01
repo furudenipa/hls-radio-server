@@ -8,12 +8,12 @@ import (
 	"strconv"
 )
 
-func NewProsekaDJ(m3u8Manager *M3U8Manager) *DJ {
+func NewProsekaDJ(m3u8Manager *m3u8Manager) *dj {
 	const jsonPath = "/srv/radio/contents/index.json"
 	contents := NewProsekaContentsFromJson(jsonPath)
-	return &DJ{
-		m3u8Manager: m3u8Manager,
-		L: RandomLogic{
+	return &dj{
+		manager: m3u8Manager,
+		logic: randomLogic{
 			contents: contents,
 		},
 	}

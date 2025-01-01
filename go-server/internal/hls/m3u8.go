@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-type m3u8 struct {
+type playlist struct {
 	header   []m3u8Line
 	segments []m3u8Line
 
@@ -33,58 +33,26 @@ const (
 	TagDISCON         Tag = "#EXT-X-DISCONTINUITY"
 )
 
-func LoadM3U8(filepath string) (*m3u8, error) {
-	content, err := os.ReadFile(filepath)
+func LoadM3U8(filepath string) (*playlist, error) {
+	rawText, err := os.ReadFile(filepath)
 	if err != nil {
 		return nil, fmt.Errorf("faild to read music m3u8: %w", err)
 	}
 
-	lines := strings.Split(string(content), "\n")
-	parsingHeader := true
+	lines := splitM3U8Lines(string(rawText))
+	header, segments, mediaSeqIndex, disconSeqIndex, tsCount := parseM3U8Lines(lines, filepath)
 
-	var header []m3u8Line
-	var segments []m3u8Line
-	var tsCount int
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		l := m3u8Line(trimmed)
-
-		if parsingHeader {
-			if l.HasTag(TagEXTINF) || l.HasTag(TagDISCON) || l.IsTS() {
-				parsingHeader = false
-				if l.IsTS() {
-					segments = append(segments, l.rewriteTsPath(filepath))
-				} else {
-					segments = append(segments, l)
-				}
-
-			} else {
-				header = append(header, l)
-			}
-		} else {
-			if l.IsTS() {
-				segments = append(segments, l.rewriteTsPath(filepath))
-			} else {
-				segments = append(segments, l)
-			}
-		}
-	}
-
-	return &m3u8{
+	return &playlist{
 		header:         header,
 		segments:       segments,
-		mediaSeqIndex:  -1,
-		disconSeqIndex: -1,
+		mediaSeqIndex:  mediaSeqIndex,
+		disconSeqIndex: disconSeqIndex,
 		tsCount:        tsCount,
 		wait:           -1.0,
 	}, nil
 }
 
-func NewM3U8(filepath string) (*m3u8, error) {
+func NewM3U8(filepath string) (*playlist, error) {
 	header := []m3u8Line{
 		m3u8Line("#EXTM3U"),
 		m3u8Line("#EXT-X-VERSION:3"),
@@ -93,7 +61,7 @@ func NewM3U8(filepath string) (*m3u8, error) {
 	}
 	var segments []m3u8Line
 
-	m := m3u8{
+	p := &playlist{
 		header:         header,
 		segments:       segments,
 		mediaSeqIndex:  3,
@@ -103,15 +71,15 @@ func NewM3U8(filepath string) (*m3u8, error) {
 		wait:    0.0,
 	}
 
-	if err := m.WriteToFile(filepath); err != nil {
-		return &m, err
+	if err := p.write(filepath); err != nil {
+		return p, err
 	}
-	return &m, nil
+	return p, nil
 }
 
-func (m *m3u8) WriteToFile(filepath string) error {
-	headerStr := strings.Join(convertM3U8LineSlice(m.header), "\n")
-	segmentsStr := strings.Join(convertM3U8LineSlice(m.segments), "\n")
+func (p *playlist) write(filepath string) error {
+	headerStr := strings.Join(convertM3U8LineSlice(p.header), "\n")
+	segmentsStr := strings.Join(convertM3U8LineSlice(p.segments), "\n")
 	err := os.WriteFile(filepath, []byte(headerStr+"\n"+segmentsStr+"\n"), 0644)
 	if err != nil {
 		return fmt.Errorf("ファイル書き込みエラー: %w", err)
@@ -119,7 +87,9 @@ func (m *m3u8) WriteToFile(filepath string) error {
 	return nil
 }
 
-func (m *m3u8) SyncFromSource(sourcePath, streamFilePath string, stopChan <-chan struct{}) error {
+func (p *playlist) SyncFromSource(
+	sourcePath, streamFilePath string, stopChan <-chan struct{},
+) error {
 	source, err := LoadM3U8(sourcePath)
 	if err != nil {
 		return fmt.Errorf("failed to read source from %s: %w", sourcePath, err)
@@ -131,9 +101,12 @@ func (m *m3u8) SyncFromSource(sourcePath, streamFilePath string, stopChan <-chan
 		select {
 		case <-stopChan:
 			return nil
-		case <-time.After(time.Duration(m.wait * float64(time.Second))):
-			m.wait = m.Update(source, segIndex)
-			m.WriteToFile(streamFilePath)
+		// update every m.wait seconds
+		case <-time.After(time.Duration(p.wait * float64(time.Second))):
+			p.wait = p.update(source, segIndex)
+			if err := p.write(streamFilePath); err != nil {
+				return nil
+			}
 			segIndex += 2
 			if segIndex >= len(source.segments)-1 {
 				// 全セグメント追加終了でreturn
@@ -148,68 +121,68 @@ func (m *m3u8) SyncFromSource(sourcePath, streamFilePath string, stopChan <-chan
 // Specifically, it utilizes the segment data from the `source` structure,
 // starting at the `index`-th line and including the next two lines,
 // to perform the update.
-func (m *m3u8) Update(source *m3u8, index int) float64 {
+func (p *playlist) update(source *playlist, index int) float64 {
 	const (
 		maxTsCount      = 6
 		segmentPairSize = 2 // #EXTINF + *.ts
 	)
 
 	linesToRemove := 0
-	if m.tsCount >= maxTsCount {
+	if p.tsCount >= maxTsCount {
 		linesToRemove = segmentPairSize
-		m.tsCount -= 1
-		m.IncrementMEDIASEQ()
+		p.tsCount -= 1
+		p.incrementMEDIASEQ()
 
-		// If the first line is a discontinuity, remove one more line
-		if m.segments[0].HasTag(TagDISCON) {
-			m.IncrementDISCONSEQ()
+		// If the first line is a discontinuity Tag, remove one more line
+		if p.segments[0].hasTag(TagDISCON) {
+			p.incrementDISCONSEQ()
 			linesToRemove = segmentPairSize + 1
 		}
 	}
 
 	// append #EXT-X-DISCONTINUITY Tag
 	if index == 0 {
-		m.segments = append(m.segments, m3u8Line(TagDISCON))
+		p.segments = append(p.segments, m3u8Line(TagDISCON))
 	}
 
-	m.segments = append(m.segments, source.segments[index:index+segmentPairSize]...)
-	m.segments = m.segments[linesToRemove:]
-	m.tsCount += 1
+	p.segments = append(p.segments, source.segments[index:index+segmentPairSize]...)
+	p.segments = p.segments[linesToRemove:]
+	p.tsCount += 1
 
 	if linesToRemove == 0 {
 		return 0.0
 	}
 
-	if l := m.segments[0]; l.HasTag(TagEXTINF) {
+	if l := p.segments[0]; l.hasTag(TagEXTINF) {
 		return l.getTagFloat(TagEXTINF)
 	}
 
 	// if line0 is TagDISCON, line1 is TagEXTINF
-	if l := m.segments[1]; l.HasTag(TagEXTINF) {
+	if l := p.segments[1]; l.hasTag(TagEXTINF) {
 		return l.getTagFloat(TagEXTINF)
 	}
 
 	return 0.0
 }
 
-func (m *m3u8) IncrementMEDIASEQ() {
-	m.header[m.mediaSeqIndex].Increment()
+func (p *playlist) incrementMEDIASEQ() {
+	p.header[p.mediaSeqIndex].increment()
 }
 
-func (m *m3u8) IncrementDISCONSEQ() {
-	if m.disconSeqIndex != -1 {
-		m.header[m.disconSeqIndex].Increment()
+func (p *playlist) incrementDISCONSEQ() {
+	if p.disconSeqIndex != -1 {
+		p.header[p.disconSeqIndex].increment()
 	} else {
-		m.disconSeqIndex = len(m.header)
-		m.header = append(m.header, m3u8Line(fmt.Sprintf("%s%d", string(TagDISCONSEQ), 1)))
+		p.disconSeqIndex = len(p.header)
+		p.header = append(p.header, m3u8Line(fmt.Sprintf("%s%d", string(TagDISCONSEQ), 1)))
 	}
 }
 
-func (l m3u8Line) HasTag(tag Tag) bool {
+func (l m3u8Line) hasTag(tag Tag) bool {
 	return strings.HasPrefix(string(l), string(tag))
 }
 
-func (l m3u8Line) IsTS() bool {
+func (l m3u8Line) isTS() bool {
 	return strings.HasSuffix(string(l), ".ts")
 }
 
@@ -218,7 +191,7 @@ func (l m3u8Line) rewriteTsPath(sourcePath string) m3u8Line {
 }
 
 func (l m3u8Line) getTagFloat(tag Tag) float64 {
-	if l.HasTag(tag) {
+	if l.hasTag(tag) {
 		parsed := string(l)[len(string(tag)):]
 		parsed = strings.TrimSuffix(parsed, ",")
 		value, err := strconv.ParseFloat(parsed, 64)
@@ -232,26 +205,89 @@ func (l m3u8Line) getTagFloat(tag Tag) float64 {
 	return 0.0
 }
 
-func (l *m3u8Line) Increment() error {
+// func (l m3u8Line) getTagInt(tag Tag) int {
+// 	if l.hasTag(tag) {
+// 		parsed := string(l)[len(string(tag)):]
+// 		parsed = strings.TrimSuffix(parsed, ",")
+// 		value, err := strconv.Atoi(parsed)
+// 		if err != nil {
+// 			slog.Error("failed to parse line", "tag", string(tag), "line", string(l), "error", err)
+// 			return 0
+// 		}
+// 		return value
+// 	}
+// 	slog.Error("This m3u8Line is not %s: %s", string(tag), string(l))
+// 	return 0
+// }
+
+func (l *m3u8Line) increment() error {
 	sl := string(*l)
-	if l.HasTag(TagMEDIASEQ) {
+	switch {
+	case l.hasTag(TagMEDIASEQ):
 		n, err := strconv.Atoi(strings.TrimSpace(sl[len(string(TagMEDIASEQ)):]))
 		if err != nil {
 			return fmt.Errorf("this line cannot increment")
 		}
 		*l = m3u8Line(fmt.Sprintf("%s%d", string(TagMEDIASEQ), n+1))
-		return nil
-	}
-
-	if l.HasTag(TagDISCONSEQ) {
+	case l.hasTag(TagDISCONSEQ):
 		n, err := strconv.Atoi(strings.TrimSpace(sl[len(string(TagDISCONSEQ)):]))
 		if err != nil {
 			return fmt.Errorf("this line cannot increment")
 		}
 		*l = m3u8Line(fmt.Sprintf("%s%d", string(TagDISCONSEQ), n+1))
-		return nil
+	default:
+		return fmt.Errorf("this line cannot increment")
 	}
-	return fmt.Errorf("this line cannot increment")
+	return nil
+}
+
+// 与えられた生文字列を行単位に分割し、空白を除いて返す
+func splitM3U8Lines(rawText string) []string {
+	rawLines := strings.Split(rawText, "\n")
+	var lines []string
+	for _, line := range rawLines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			lines = append(lines, trimmed)
+		}
+	}
+	return lines
+}
+
+func parseM3U8Lines(lines []string, sourcePath string) ([]m3u8Line, []m3u8Line, int, int, int) {
+	parsingHeader := true
+	var header []m3u8Line
+	var segments []m3u8Line
+	var mediaSeqIndex = -1
+	var disconSeqIndex = -1
+	var tsCount int
+	for i, line := range lines {
+		l := m3u8Line(line)
+
+		if parsingHeader {
+			if l.hasTag(TagEXTINF) || l.hasTag(TagDISCON) || l.isTS() {
+				parsingHeader = false
+			} else {
+				header = append(header, l)
+				if l.hasTag(TagMEDIASEQ) {
+					mediaSeqIndex = i
+				} else if l.hasTag(TagDISCONSEQ) {
+					disconSeqIndex = i
+				}
+			}
+		}
+
+		if !parsingHeader {
+			if l.isTS() {
+				tsCount += 1
+				segments = append(segments, l.rewriteTsPath(sourcePath))
+			} else {
+				segments = append(segments, l)
+			}
+		}
+	}
+
+	return header, segments, mediaSeqIndex, disconSeqIndex, tsCount
 }
 
 func convertM3U8LineSlice(ls []m3u8Line) []string {
