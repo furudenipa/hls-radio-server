@@ -2,7 +2,7 @@ services:
   goapp:
     build: ./go-server
     container_name: goapp
-    expose: 
+    expose:
       - "8080"
     volumes:
       - ./radio_data:/srv/radio
@@ -15,7 +15,7 @@ services:
     build: ./nginx
     container_name: nginx
     ports:
-      - "80:80"
+      - "8080:80"
     depends_on:
       - goapp
     volumes:
