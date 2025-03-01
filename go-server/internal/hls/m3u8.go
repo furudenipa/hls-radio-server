@@ -187,7 +187,18 @@ func (l m3u8Line) isTS() bool {
 }
 
 func (l m3u8Line) rewriteTsPath(sourcePath string) m3u8Line {
-	return m3u8Line(localToURL(filepath.Join(filepath.Dir(sourcePath), string(l))))
+	// TSファイルの相対パスを絶対パスに変換
+	tsPath := string(l)
+	sourceDir := filepath.Dir(sourcePath)
+
+	// 相対パスを絶対パスに変換し、パスを正規化
+	absPath := filepath.Clean(filepath.Join(sourceDir, tsPath))
+
+	// パスをスラッシュ形式に統一
+	normalizedPath := filepath.ToSlash(absPath)
+
+	// URLに変換
+	return m3u8Line(localToURL(normalizedPath))
 }
 
 func (l m3u8Line) getTagFloat(tag Tag) float64 {
@@ -206,18 +217,18 @@ func (l m3u8Line) getTagFloat(tag Tag) float64 {
 }
 
 // func (l m3u8Line) getTagInt(tag Tag) int {
-// 	if l.hasTag(tag) {
-// 		parsed := string(l)[len(string(tag)):]
-// 		parsed = strings.TrimSuffix(parsed, ",")
-// 		value, err := strconv.Atoi(parsed)
-// 		if err != nil {
-// 			slog.Error("failed to parse line", "tag", string(tag), "line", string(l), "error", err)
-// 			return 0
-// 		}
-// 		return value
-// 	}
-// 	slog.Error("This m3u8Line is not %s: %s", string(tag), string(l))
-// 	return 0
+// if l.hasTag(tag) {
+// parsed := string(l)[len(string(tag)):]
+// parsed = strings.TrimSuffix(parsed, ",")
+// value, err := strconv.Atoi(parsed)
+// if err != nil {
+// slog.Error("failed to parse line", "tag", string(tag), "line", string(l), "error", err)
+// return 0
+// }
+// return value
+// }
+// slog.Error("This m3u8Line is not %s: %s", string(tag), string(l))
+// return 0
 // }
 
 func (l *m3u8Line) increment() error {
