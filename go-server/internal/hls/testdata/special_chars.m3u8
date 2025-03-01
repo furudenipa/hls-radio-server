@@ -1,0 +1,10 @@
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:10
+#EXT-X-MEDIA-SEQUENCE:0
+#EXTINF:9.009,
+special path/with spaces/segment1.ts
+#EXTINF:9.009,
+path/with#hash/segment2.ts
+#EXTINF:9.009,
+path/with?query=param/segment3.ts

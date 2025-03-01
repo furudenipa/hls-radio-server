@@ -14,8 +14,8 @@ type playlist struct {
 	header   []m3u8Line
 	segments []m3u8Line
 
-	mediaSeqIndex  int
-	disconSeqIndex int
+	mediaSeqIndex  int // #EXT-X-MEDIA-SEQUENCE:のindex
+	disconSeqIndex int // #EXT-X-DISCONTINUITY-SEQUENCE:のindex
 
 	tsCount int // should remove(?)
 	wait    float64
