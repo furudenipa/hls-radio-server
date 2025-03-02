@@ -59,7 +59,6 @@ func (m *m3u8Manager) Run() {
 func (m *m3u8Manager) HandleUpdate(c content) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	sourcePath := c.ToStreamFilePath(m.baseDir)
 	return m.stream.SyncFromSource(sourcePath, m.streamFilePath, m.stopChan)
 }
@@ -69,5 +68,11 @@ func (m *m3u8Manager) Add(c content) {
 }
 
 func (m *m3u8Manager) Stop() {
-	close(m.stopChan)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.status != StatusStopped {
+		close(m.stopChan)
+		m.status = StatusStopped
+	}
 }
