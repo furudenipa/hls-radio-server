@@ -1,0 +1,44 @@
+name: CI pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Run Go Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Install dependencies
+        run: cd go-server && go mod tidy
+
+      - name: Run tests
+        run: cd go-server && go test ./internal/hls -v
+
+
+  docker-build:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Go Server Docker Image
+        run: docker build -t go-server ./go-server
+
+      - name: Build Nginx Docker Image
+        run: docker build -t nginx-server ./nginx
