@@ -23,10 +23,10 @@ jobs:
           go-version: '1.23'
 
       - name: Install dependencies
-        run: go mod tidy
+        run: cd go-server && go mod tidy
 
       - name: Run tests
-        run: go test ./go-server/internal/hls -v
+        run: cd go-server && go test ./internal/hls -v
 
 
   docker-build:
