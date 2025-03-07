@@ -3,16 +3,17 @@ package hls
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"os"
+
 	"log/slog"
 	"strconv"
 )
 
-func NewProsekaDJ(m3u8Manager *playlistManager) *dj {
+func NewProsekaDJ(playlistManager *playlistManager) *dj {
 	const jsonPath = "/srv/radio/contents/index.json"
 	contents := NewProsekaContentsFromJson(jsonPath)
 	return &dj{
-		manager: m3u8Manager,
+		manager: playlistManager,
 		logic: randomLogic{
 			contents: contents,
 		},
@@ -31,9 +32,9 @@ type Track struct {
 	M3U8   string `json:"m3u8"`
 }
 
-func NewProsekaContentsFromJson(filepath string) []content {
+func NewProsekaContentsFromJson(jsonPath string) []content {
 	// ファイルを読み込む
-	data, err := ioutil.ReadFile(filepath)
+	data, err := os.ReadFile(jsonPath)
 	if err != nil {
 		fmt.Println("Error reading file:", err)
 		return nil
@@ -59,6 +60,7 @@ func NewProsekaContentsFromJson(filepath string) []content {
 			contentType: audio, // 固定値
 			isTmp:       false, // 固定値
 			length:      track.Length,
+			formatter:   DefaultContentFormatter{},
 		})
 	}
 

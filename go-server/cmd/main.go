@@ -20,7 +20,7 @@ func main() {
 	)
 
 	manager := hls.NewPlaylistManager(p)
-	dj := hls.NewClassicDJ(manager)
+	dj := hls.NewProsekaDJ(manager)
 	go dj.Start()
 	stopChan := make(chan os.Signal, 1)
 	signal.Notify(stopChan, syscall.SIGINT, syscall.SIGTERM)
@@ -37,7 +37,7 @@ func main() {
 		fmt.Fprintln(w, "OK")
 	})
 
-	http.HandleFunc("/playlist", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/stations/proseka/stream.m3u8", func(w http.ResponseWriter, r *http.Request) {
 		c, err := pFormatter.Format(p)
 		if err != nil {
 			http.Error(w, "Failed to format playlist", http.StatusInternalServerError)

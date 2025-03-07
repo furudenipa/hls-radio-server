@@ -42,7 +42,7 @@ func NewAudioContent(id int, length int, formatter contentFormatter) *content {
 
 // TODO: abstract this method
 func (d DefaultContentFormatter) sourcePath(c content) string {
-	return "srv/radio/radio_data/contents/" + string(c.contentType) + "/" + strconv.Itoa(c.id) + "/" + strconv.Itoa(c.id) + ".m3u8"
+	return "/srv/radio/contents/" + string(c.contentType) + "/" + strconv.Itoa(c.id) + "/" + strconv.Itoa(c.id) + ".m3u8"
 }
 
 // TODO: abstract this method
