@@ -8,7 +8,7 @@ import (
 	"strconv"
 )
 
-func NewProsekaDJ(m3u8Manager *m3u8Manager) *dj {
+func NewProsekaDJ(m3u8Manager *playlistManager) *dj {
 	const jsonPath = "/srv/radio/contents/index.json"
 	contents := NewProsekaContentsFromJson(jsonPath)
 	return &dj{

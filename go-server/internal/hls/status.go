@@ -5,7 +5,9 @@ type Status int
 const (
 	StatusDefault   Status = iota // 初期状態
 	StatusStreaming               // ストリーミング中
-	StatusStopped                 // 停止状態
+	StatusKilled                  // 終了状態
+	StatusPaused                  // 一時停止中
+
 )
 
 func (s Status) String() string {
@@ -14,8 +16,10 @@ func (s Status) String() string {
 		return "Default"
 	case StatusStreaming:
 		return "Streaming"
-	case StatusStopped:
-		return "Stopped"
+	case StatusKilled:
+		return "Killed"
+	case StatusPaused:
+		return "Paused"
 	default:
 		return "Unknown"
 	}

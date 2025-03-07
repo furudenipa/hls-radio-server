@@ -1,13 +1,13 @@
 package hls
 
-func NewClassicDJ(m3u8Manager *m3u8Manager) *dj {
+func NewClassicDJ(pManager *playlistManager) *dj {
 	contents := []content{
-		*NewAudioContent(1, 85),
-		*NewAudioContent(2, 196),
-		*NewAudioContent(3, 43),
+		*NewAudioContent(1, 85, DefaultContentFormatter{}),
+		*NewAudioContent(2, 196, DefaultContentFormatter{}),
+		*NewAudioContent(3, 43, DefaultContentFormatter{}),
 	}
 	return &dj{
-		manager: m3u8Manager,
+		manager: pManager,
 		logic: randomLogic{
 			contents: contents,
 		},

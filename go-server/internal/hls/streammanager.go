@@ -1,78 +1,162 @@
 package hls
 
 import (
-	"log/slog"
+	"errors"
+	"fmt"
 	"sync"
+	"time"
+)
+
+var (
+	ErrBufferFull = errors.New("segment buffer is full: maximum duration exceeded")
 )
 
 type StreamManager interface {
 	Run()
-	Add(content)
-	Stop()
+	Add(content) error
+	Kill()
+	Pause()
+	Resume()
 }
 
-type m3u8Manager struct {
-	stream *playlist
+type playlistManager struct {
+	p *playlist
 
-	updateChan     chan content
-	stopChan       chan struct{}
-	baseDir        string
-	streamFilePath string
+	segQ       segmentsQueue
+	killChan   chan struct{}
+	pauseChan  chan struct{}
+	resumeChan chan struct{}
 
-	mu sync.Mutex
+	enoughBufferDuration float64
 
-	status Status
+	statusMu sync.Mutex
+	segQMu   sync.Mutex
+	status   Status
 }
 
-func NewStreamM3U8Manager(baseDir, streamFilePath string) *m3u8Manager {
-	const maxConn = 10
-	playlist, err := NewM3U8(streamFilePath)
-	if err != nil {
-		slog.Error("failed to create m3u8", "error", err)
+func NewPlaylistManager(p *playlist) *playlistManager {
+	return &playlistManager{
+		p: p,
+		segQ: segmentsQueue{
+			segments: make([]segment, 0),
+		},
+		killChan:   make(chan struct{}),
+		pauseChan:  make(chan struct{}),
+		resumeChan: make(chan struct{}),
+
+		enoughBufferDuration: 100.0,
+
+		statusMu: sync.Mutex{},
+		segQMu:   sync.Mutex{},
+		status:   StatusDefault,
 	}
-	return &m3u8Manager{
-		stream:         playlist, // TODO:
-		updateChan:     make(chan content, maxConn),
-		stopChan:       make(chan struct{}),
-		baseDir:        baseDir,
-		streamFilePath: streamFilePath,
-	}
 }
 
-func (m *m3u8Manager) Run() {
-	defer close(m.updateChan)
+func (m *playlistManager) Run() {
+	m.statusMu.Lock()
+	if m.status != StatusDefault {
+		m.statusMu.Unlock()
+		return
+	}
 	m.status = StatusStreaming
+	m.statusMu.Unlock()
+
+	var updatePlaylistChan <-chan time.Time
+	updatePlaylistChan = time.After(time.Duration(250) * time.Millisecond)
+
 	for {
 		select {
-		case c := <-m.updateChan:
-			if err := m.HandleUpdate(c); err != nil {
-				slog.Error("faild to update stream", "err", err)
+		case <-updatePlaylistChan:
+			m.statusMu.Lock()
+			if m.status != StatusStreaming {
+				updatePlaylistChan = time.After(time.Second)
+				continue
 			}
-		case <-m.stopChan:
-			m.status = StatusStopped
+			m.statusMu.Unlock()
+
+			m.segQMu.Lock()
+			if seg, err := m.segQ.pop(); err == nil {
+				fmt.Println("pop", seg.String()) //TEST
+				wait := m.p.Update(seg)
+				fmt.Println("wait", wait) //TEST
+				if wait >= 0 {
+					updatePlaylistChan = time.After(time.Duration(int(wait) * int(time.Second)))
+				} else {
+					//TODO: logging  wait is not positive
+					updatePlaylistChan = time.After(time.Second)
+				}
+			} else {
+				// TODO: logging  queue is empty or error
+				updatePlaylistChan = time.After(time.Second)
+			}
+			m.segQMu.Unlock()
+
+		case <-m.pauseChan:
+			m.statusMu.Lock()
+			if m.status == StatusStreaming {
+				m.status = StatusPaused
+			}
+			m.statusMu.Unlock()
+
+		case <-m.resumeChan:
+			m.statusMu.Lock()
+			if m.status == StatusPaused {
+				m.status = StatusStreaming
+			}
+			m.statusMu.Unlock()
+
+		case <-m.killChan:
+			m.statusMu.Lock()
+			m.status = StatusKilled
+			m.statusMu.Unlock()
+			// m.killChan = nil
 			return
 		}
 	}
 }
 
-// idをもとにstream.m3u8を更新する
-func (m *m3u8Manager) HandleUpdate(c content) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	sourcePath := c.ToStreamFilePath(m.baseDir)
-	return m.stream.SyncFromSource(sourcePath, m.streamFilePath, m.stopChan)
+func (m *playlistManager) Add(c content) error {
+	m.segQMu.Lock()
+	defer m.segQMu.Unlock()
+
+	if m.segQ.totalDuration > m.enoughBufferDuration {
+		return fmt.Errorf("buffer full (current: %.2f, max: %.2f): %w",
+			m.segQ.totalDuration,
+			m.enoughBufferDuration,
+			ErrBufferFull)
+	}
+
+	segs := c.ToSegments()
+	segs[0].discontinuity = true // 最初のセグメントにはDISCONTINUITYを入れる
+	for _, seg := range segs {
+		fmt.Println(seg.String()) //TEST
+		m.segQ.push(seg)
+	}
+	return nil
 }
 
-func (m *m3u8Manager) Add(c content) {
-	m.updateChan <- c
+func (m *playlistManager) Kill() {
+	m.statusMu.Lock()
+	defer m.statusMu.Unlock()
+
+	if m.status != StatusKilled {
+		close(m.killChan)
+		m.status = StatusKilled
+	}
 }
 
-func (m *m3u8Manager) Stop() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (m *playlistManager) Pause() {
+	m.statusMu.Lock()
+	defer m.statusMu.Unlock()
+	if m.status == StatusStreaming {
+		m.pauseChan <- struct{}{}
+	}
+}
 
-	if m.status != StatusStopped {
-		close(m.stopChan)
-		m.status = StatusStopped
+func (m *playlistManager) Resume() {
+	m.statusMu.Lock()
+	defer m.statusMu.Unlock()
+	if m.status == StatusPaused {
+		m.resumeChan <- struct{}{}
 	}
 }
