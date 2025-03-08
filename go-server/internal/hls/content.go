@@ -6,6 +6,15 @@ import (
 	"strconv"
 )
 
+// Content defines the interface for content operations
+type Content interface {
+	ToSegments() []segment
+	ToStreamFilePath(baseDir string) string
+	SourcePath() string
+	UrlPath() string
+	SegmentLocalToGlobal(segment) segment
+}
+
 type content struct {
 	id          int
 	contentType ContentType
@@ -36,7 +45,7 @@ func NewAudioContent(id int, length int, formatter contentFormatter) *content {
 		contentType: audio,
 		isTmp:       false,
 		length:      length,
-		formatter:   DefaultContentFormatter{},
+		formatter:   formatter,
 	}
 }
 
@@ -56,12 +65,24 @@ func (d DefaultContentFormatter) segmentLocalToGlobal(seg segment, c content) se
 	return seg
 }
 
+func (c content) SourcePath() string {
+	return c.formatter.sourcePath(c)
+}
+
+func (c content) UrlPath() string {
+	return c.formatter.urlPath(c)
+}
+
+func (c content) SegmentLocalToGlobal(seg segment) segment {
+	return c.formatter.segmentLocalToGlobal(seg, c)
+}
+
 func (c content) ToStreamFilePath(baseDir string) string {
 	return filepath.Join(baseDir, "contents", string(c.contentType), strconv.Itoa(c.id), strconv.Itoa(c.id)+".m3u8")
 }
 
 func (c content) ToSegments() []segment {
-	sourcePath := c.formatter.sourcePath(c)
+	sourcePath := c.SourcePath()
 
 	// TODO: abstract this using interface
 	fs := DefaultFileSystem{}
@@ -82,7 +103,7 @@ func (c content) ToSegments() []segment {
 
 	segments := make([]segment, len(playlist.segments))
 	for i, seg := range playlist.segments {
-		segments[i] = c.formatter.segmentLocalToGlobal(seg, c)
+		segments[i] = c.SegmentLocalToGlobal(seg)
 	}
 	return segments
 }

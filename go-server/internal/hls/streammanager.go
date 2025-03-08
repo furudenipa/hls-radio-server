@@ -11,16 +11,22 @@ var (
 	ErrBufferFull = errors.New("segment buffer is full: maximum duration exceeded")
 )
 
+// PlaylistUpdater defines the interface for playlist update operations
+type PlaylistUpdater interface {
+	Update(segment) float64
+}
+
+// StreamManager defines the interface for managing HLS streams
 type StreamManager interface {
 	Run()
-	Add(content) error
+	Add(Content) error
 	Kill()
 	Pause()
 	Resume()
 }
 
 type playlistManager struct {
-	p *playlist
+	p PlaylistUpdater
 
 	segQ       segmentsQueue
 	killChan   chan struct{}
@@ -34,7 +40,7 @@ type playlistManager struct {
 	status   Status
 }
 
-func NewPlaylistManager(p *playlist) *playlistManager {
+func NewPlaylistManager(p PlaylistUpdater) *playlistManager {
 	return &playlistManager{
 		p: p,
 		segQ: segmentsQueue{
@@ -115,7 +121,7 @@ func (m *playlistManager) Run() {
 	}
 }
 
-func (m *playlistManager) Add(c content) error {
+func (m *playlistManager) Add(c Content) error {
 	m.segQMu.Lock()
 	defer m.segQMu.Unlock()
 
