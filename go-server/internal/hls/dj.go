@@ -1,38 +1,48 @@
 package hls
 
 import (
+	"errors"
 	"fmt"
-	"log/slog"
 	"math/rand"
 	"time"
+
+	"log/slog"
 )
 
 const sleepTime = 10
-const necessaryRemainingTime = 80
 
 type dj struct {
-	manager       StreamManager
-	logic         logic
-	remainingTime int // second
+	manager StreamManager
+	logic   logic
 }
 
 func (d *dj) Start() error {
 	go d.manager.Run()
+
 	for {
+		content, err := d.logic.Choice()
+		if err != nil {
+			return err
+		}
+
 		for {
-			if d.remainingTime >= necessaryRemainingTime {
+			err = d.manager.Add(content)
+
+			if err == nil {
+				// 追加成功したら次のコンテンツを選ぶ
+				slog.Info("added content", "content_id", content.id)
 				break
 			}
-			content, err := d.logic.Choice()
-			if err != nil {
-				return err
+			if errors.Is(err, ErrBufferFull) {
+				slog.Info("buffer is full, retrying", "content_id", content.id)
+				// バッファが一杯なら待機して再試行（同じコンテンツを使用）
+				time.Sleep(time.Duration(sleepTime) * time.Second)
+				slog.Info("wakup", "content_id", content.id)
+				continue
 			}
-			d.remainingTime += content.length
-			d.manager.Add(content)
+			// その他のエラーは即座に終了
+			return err
 		}
-		slog.Info("DJ: ", "remainingTime", d.remainingTime)
-		time.Sleep(sleepTime * time.Second)
-		d.remainingTime -= sleepTime
 	}
 }
 

@@ -1,7 +1,8 @@
 package hls
 
 import (
-	"os"
+	"context"
+	"errors"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -9,324 +10,474 @@ import (
 	"time"
 )
 
-// テスト用のヘルパー関数
-func setupTest(t *testing.T) (string, func()) {
-	t.Helper()
-
-	// テスト用の一時ディレクトリを作成
-	tmpDir, err := os.MkdirTemp("", "streammanager-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-
-	// テスト用のm3u8ファイルを作成
-	testM3U8 := []byte(`#EXTM3U
-#EXT-X-VERSION:3
-#EXT-X-TARGETDURATION:10
-#EXT-X-MEDIA-SEQUENCE:0
-#EXTINF:1.009,
-segment1.ts
-#EXTINF:1.008,
-segment2.ts
-`)
-
-	if err := os.WriteFile(filepath.Join(tmpDir, "test.m3u8"), testM3U8, 0644); err != nil {
-		t.Fatalf("failed to create test m3u8: %v", err)
-	}
-
-	// コンテンツディレクトリの作成とテストm3u8ファイルの生成
-	for i := 1; i <= 10; i++ {
-		contentDir := filepath.Join(tmpDir, "contents", "music", strconv.Itoa(i))
-		if err := os.MkdirAll(contentDir, 0755); err != nil {
-			t.Fatalf("failed to create content dir: %v", err)
-		}
-
-		// テスト用のm3u8ファイルを各コンテンツディレクトリに作成
-		contentM3U8 := []byte(`#EXTM3U
-#EXT-X-VERSION:3
-#EXT-X-TARGETDURATION:10
-#EXT-X-MEDIA-SEQUENCE:0
-#EXTINF:10.0,
-segment1.ts
-`)
-		if err := os.WriteFile(filepath.Join(contentDir, strconv.Itoa(i)+".m3u8"), contentM3U8, 0644); err != nil {
-			t.Fatalf("failed to create content m3u8: %v", err)
-		}
-	}
-
-	cleanup := func() {
-		os.RemoveAll(tmpDir)
-	}
-
-	return tmpDir, cleanup
+// モックの実装
+type mockPlaylist struct {
+	mu          sync.Mutex
+	updateCount int
+	lastSegment *segment
+	updateDelay time.Duration
+	err         error
 }
 
-// テスト用の操作タイプ
-type opType int
-
-const (
-	opRun opType = iota
-	opAdd
-	opStop
-)
-
-// テスト用の操作
-type testOp struct {
-	opType  opType
-	content content
-	wait    time.Duration
+func newMockPlaylist() *mockPlaylist {
+	return &mockPlaylist{
+		mu:          sync.Mutex{},
+		updateCount: 0,
+	}
 }
 
-func TestNewStreamM3U8Manager(t *testing.T) {
-	tmpDir, cleanup := setupTest(t)
-	defer cleanup()
+func (m *mockPlaylist) Update(seg segment) float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-	tests := []struct {
-		name       string
-		baseDir    string
-		streamPath string
-		wantErr    bool
-	}{
+	if m.err != nil {
+		return 0
+	}
+
+	if m.updateDelay > 0 {
+		time.Sleep(m.updateDelay)
+	}
+
+	m.updateCount++
+	m.lastSegment = &seg
+	return 10.0
+}
+
+func (m *mockPlaylist) SetError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.err = err
+}
+
+func (m *mockPlaylist) SetUpdateDelay(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.updateDelay = d
+}
+
+func (m *mockPlaylist) GetUpdateCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.updateCount
+}
+
+func (m *mockPlaylist) GetLastSegment() *segment {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastSegment
+}
+
+// モックコンテンツ
+type mockContent struct {
+	id       int
+	segments []segment
+}
+
+func newMockContent(segments []segment) mockContent {
+	return mockContent{
+		segments: segments,
+		id:       1,
+	}
+}
+
+func (m mockContent) ToSegments() []segment {
+	return m.segments
+}
+
+func (m mockContent) SourcePath() string {
+	return "/test/content/" + strconv.Itoa(m.id) + ".m3u8"
+}
+
+func (m mockContent) UrlPath() string {
+	return "/contents/test/" + strconv.Itoa(m.id) + ".m3u8"
+}
+
+func (m mockContent) SegmentLocalToGlobal(seg segment) segment {
+	seg.uri = "/contents/test/" + strconv.Itoa(m.id) + "/" + seg.uri
+	return seg
+}
+
+func (m mockContent) ToStreamFilePath(baseDir string) string {
+	return filepath.Join(baseDir, "contents", "test", strconv.Itoa(m.id)+".m3u8")
+}
+
+// テストコンテキスト
+type testContext struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	manager  *playlistManager
+	playlist *mockPlaylist
+	wg       sync.WaitGroup
+	errChan  chan error
+}
+
+func newTestContext(t *testing.T) *testContext {
+	ctx, cancel := context.WithCancel(context.Background())
+	playlist := newMockPlaylist()
+	manager := NewPlaylistManager(playlist)
+
+	return &testContext{
+		ctx:      ctx,
+		cancel:   cancel,
+		manager:  manager,
+		playlist: playlist,
+		errChan:  make(chan error, 1),
+	}
+}
+
+func (tc *testContext) cleanup() {
+	tc.cancel()
+	tc.wg.Wait()
+	close(tc.errChan)
+}
+
+func (tc *testContext) runWithTimeout(t *testing.T, timeout time.Duration, f func() error) error {
+	done := make(chan error, 1)
+
+	go func() {
+		done <- f()
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(timeout):
+		t.Fatal("test timed out")
+		return nil
+	}
+}
+
+// テストケース構造体
+type testCase struct {
+	name    string
+	setup   func(*testContext)
+	run     func(*testing.T, *testContext) error
+	verify  func(*testing.T, *testContext)
+	cleanup func(*testContext)
+	timeout time.Duration
+}
+
+func runTestCase(t *testing.T, tc testCase) {
+	ctx := newTestContext(t)
+	defer ctx.cleanup()
+
+	if tc.setup != nil {
+		tc.setup(ctx)
+	}
+
+	if err := ctx.runWithTimeout(t, tc.timeout, func() error {
+		return tc.run(t, ctx)
+	}); err != nil {
+		t.Errorf("test failed: %v", err)
+		return
+	}
+
+	if tc.verify != nil {
+		tc.verify(t, ctx)
+	}
+}
+
+// 基本的なテストケース
+func TestNewPlaylistManager(t *testing.T) {
+	tests := []testCase{
 		{
-			name:       "正常系",
-			baseDir:    tmpDir,
-			streamPath: filepath.Join(tmpDir, "stream.m3u8"),
-			wantErr:    false,
-		},
-		{
-			name:       "不正なベースディレクトリ",
-			baseDir:    "/nonexistent",
-			streamPath: filepath.Join(tmpDir, "stream.m3u8"),
-			wantErr:    false, // 初期化時点ではエラーにならない
+			name: "basic_initialization",
+			run: func(t *testing.T, tc *testContext) error {
+				if tc.manager == nil {
+					return errors.New("manager should not be nil")
+				}
+				return nil
+			},
+			verify: func(t *testing.T, tc *testContext) {
+				if tc.manager.status != StatusDefault {
+					t.Errorf("initial status = %v, want %v", tc.manager.status, StatusDefault)
+				}
+
+				if tc.manager.enoughBufferDuration != 100.0 {
+					t.Errorf("buffer duration = %v, want %v", tc.manager.enoughBufferDuration, 100.0)
+				}
+			},
+			timeout: time.Second,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			manager := NewStreamM3U8Manager(tt.baseDir, tt.streamPath)
-			if (manager == nil) != tt.wantErr {
-				t.Errorf("NewStreamM3U8Manager() error = %v, wantErr %v", manager == nil, tt.wantErr)
-				return
-			}
-
-			if manager != nil {
-				if manager.baseDir != tt.baseDir {
-					t.Errorf("baseDir = %v, want %v", manager.baseDir, tt.baseDir)
-				}
-				if manager.streamFilePath != tt.streamPath {
-					t.Errorf("streamFilePath = %v, want %v", manager.streamFilePath, tt.streamPath)
-				}
-				if manager.updateChan == nil {
-					t.Error("updateChan is nil")
-				}
-				if manager.stopChan == nil {
-					t.Error("stopChan is nil")
-				}
-			}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runTestCase(t, tc)
 		})
 	}
 }
 
-func TestStreamManagerOperations(t *testing.T) {
-	tmpDir, cleanup := setupTest(t)
-	defer cleanup()
+func TestPlaylistManager_Run(t *testing.T) {
+	tests := []testCase{
+		{
+			name: "normal_operation",
+			run: func(t *testing.T, tc *testContext) error {
+				go tc.manager.Run()
+				time.Sleep(100 * time.Millisecond) // 状態変更を待つ
 
-	tests := []struct {
-		name        string
-		operations  []testOp
-		expectState Status
-		expectErr   bool
-	}{
-		{
-			name: "基本的な操作シーケンス",
-			operations: []testOp{
-				{opType: opRun},
-				{opType: opAdd, content: content(*NewAudioContent(1, 10))},
-				{opType: opAdd, content: content(*NewAudioContent(2, 10))},
-				{opType: opStop},
+				return nil
 			},
-			expectState: StatusStopped,
-			expectErr:   false,
+			verify: func(t *testing.T, tc *testContext) {
+				tc.manager.statusMu.Lock()
+				defer tc.manager.statusMu.Unlock()
+
+				if tc.manager.status != StatusStreaming {
+					t.Errorf("status = %v, want %v", tc.manager.status, StatusStreaming)
+				}
+			},
+			timeout: time.Second,
 		},
 		{
-			name: "早期Stop",
-			operations: []testOp{
-				{opType: opRun},
-				{opType: opStop},
+			name: "already_running",
+			setup: func(tc *testContext) {
+				go tc.manager.Run()
+				time.Sleep(100 * time.Millisecond)
 			},
-			expectState: StatusStopped,
-			expectErr:   false,
-		},
-		{
-			name: "不正なコンテンツ",
-			operations: []testOp{
-				{opType: opRun},
-				{opType: opAdd, content: content(*NewAudioContent(-1, -1))}, // 不正なパラメータ
-				{opType: opStop},
+			run: func(t *testing.T, tc *testContext) error {
+				tc.manager.Run() // 2回目の実行
+				return nil
 			},
-			expectState: StatusStopped,
-			expectErr:   false,
+			verify: func(t *testing.T, tc *testContext) {
+				tc.manager.statusMu.Lock()
+				defer tc.manager.statusMu.Unlock()
+
+				if tc.manager.status != StatusStreaming {
+					t.Errorf("status = %v, want %v", tc.manager.status, StatusStreaming)
+				}
+			},
+			timeout: time.Second,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			manager := NewStreamM3U8Manager(tmpDir, filepath.Join(tmpDir, "stream.m3u8"))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runTestCase(t, tc)
+		})
+	}
+}
 
-			var wg sync.WaitGroup
-			for _, op := range tt.operations {
-				switch op.opType {
-				case opRun:
+func TestPlaylistManager_Add(t *testing.T) {
+	tests := []testCase{
+		{
+			name: "add_content_success",
+			setup: func(tc *testContext) {
+				go tc.manager.Run()
+				time.Sleep(100 * time.Millisecond)
+			},
+			run: func(t *testing.T, tc *testContext) error {
+				content := newMockContent([]segment{
+					{duration: 10.0, uri: "test1.ts"},
+					{duration: 10.0, uri: "test2.ts"},
+				})
+				return tc.manager.Add(content)
+			},
+			verify: func(t *testing.T, tc *testContext) {
+				tc.manager.segQMu.Lock()
+				qLen := len(tc.manager.segQ.segments)
+				tc.manager.segQMu.Unlock()
+
+				if qLen != 2 {
+					t.Errorf("queue length = %v, want %v", qLen, 2)
+				}
+			},
+			timeout: time.Second,
+		},
+		{
+			name: "add_content_buffer_full",
+			setup: func(tc *testContext) {
+				go tc.manager.Run()
+				time.Sleep(100 * time.Millisecond)
+
+				// バッファを満杯にする
+				content := newMockContent([]segment{
+					{duration: 60.0, uri: "test1.ts"},
+					{duration: 60.0, uri: "test2.ts"},
+				})
+				tc.manager.Add(content)
+			},
+			run: func(t *testing.T, tc *testContext) error {
+				content := newMockContent([]segment{
+					{duration: 10.0, uri: "test3.ts"},
+				})
+				err := tc.manager.Add(content)
+				if !errors.Is(err, ErrBufferFull) {
+					t.Errorf("expected ErrBufferFull but got: %v", err)
+				}
+				return nil
+			},
+			timeout: time.Second,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runTestCase(t, tc)
+		})
+	}
+}
+
+func TestPlaylistManager_Kill(t *testing.T) {
+	tests := []testCase{
+		{
+			name: "kill_running_manager",
+			setup: func(tc *testContext) {
+				go tc.manager.Run()
+				time.Sleep(100 * time.Millisecond)
+			},
+			run: func(t *testing.T, tc *testContext) error {
+				tc.manager.Kill()
+				return nil
+			},
+			verify: func(t *testing.T, tc *testContext) {
+				tc.manager.statusMu.Lock()
+				defer tc.manager.statusMu.Unlock()
+
+				if tc.manager.status != StatusKilled {
+					t.Errorf("status = %v, want %v", tc.manager.status, StatusKilled)
+				}
+			},
+			timeout: time.Second,
+		},
+		{
+			name: "kill_already_killed",
+			setup: func(tc *testContext) {
+				go tc.manager.Run()
+				time.Sleep(100 * time.Millisecond)
+				tc.manager.Kill()
+			},
+			run: func(t *testing.T, tc *testContext) error {
+				tc.manager.Kill() // 2回目のKill
+				return nil
+			},
+			verify: func(t *testing.T, tc *testContext) {
+				tc.manager.statusMu.Lock()
+				defer tc.manager.statusMu.Unlock()
+
+				if tc.manager.status != StatusKilled {
+					t.Errorf("status = %v, want %v", tc.manager.status, StatusKilled)
+				}
+			},
+			timeout: time.Second,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runTestCase(t, tc)
+		})
+	}
+}
+
+func TestPlaylistManager_PauseResume(t *testing.T) {
+	tests := []testCase{
+		{
+			name: "pause_resume_cycle",
+			setup: func(tc *testContext) {
+				go tc.manager.Run()
+				time.Sleep(100 * time.Millisecond)
+			},
+			run: func(t *testing.T, tc *testContext) error {
+				tc.manager.Pause()
+				time.Sleep(100 * time.Millisecond)
+
+				tc.manager.statusMu.Lock()
+				if tc.manager.status != StatusPaused {
+					tc.manager.statusMu.Unlock()
+					return errors.New("manager should be paused")
+				}
+				tc.manager.statusMu.Unlock()
+
+				tc.manager.Resume()
+				time.Sleep(100 * time.Millisecond)
+
+				return nil
+			},
+			verify: func(t *testing.T, tc *testContext) {
+				tc.manager.statusMu.Lock()
+				defer tc.manager.statusMu.Unlock()
+
+				if tc.manager.status != StatusStreaming {
+					t.Errorf("status = %v, want %v", tc.manager.status, StatusStreaming)
+				}
+			},
+			timeout: time.Second,
+		},
+		{
+			name: "pause_when_not_streaming",
+			setup: func(tc *testContext) {
+				// Runを実行せずにテスト
+			},
+			run: func(t *testing.T, tc *testContext) error {
+				tc.manager.Pause()
+				return nil
+			},
+			verify: func(t *testing.T, tc *testContext) {
+				tc.manager.statusMu.Lock()
+				defer tc.manager.statusMu.Unlock()
+
+				if tc.manager.status != StatusDefault {
+					t.Errorf("status = %v, want %v", tc.manager.status, StatusDefault)
+				}
+			},
+			timeout: time.Second,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runTestCase(t, tc)
+		})
+	}
+}
+
+func TestPlaylistManager_Concurrency(t *testing.T) {
+	tests := []testCase{
+		{
+			name: "concurrent_adds",
+			setup: func(tc *testContext) {
+				go tc.manager.Run()
+				time.Sleep(100 * time.Millisecond)
+				tc.playlist.SetUpdateDelay(50 * time.Millisecond)
+			},
+			run: func(t *testing.T, tc *testContext) error {
+				var wg sync.WaitGroup
+				for i := 0; i < 5; i++ {
 					wg.Add(1)
-					go func() {
+					go func(i int) {
 						defer wg.Done()
-						manager.Run()
-					}()
-					time.Sleep(100 * time.Millisecond) // Run()の開始を待つ
-				case opAdd:
-					manager.Add(op.content)
-					if op.wait > 0 {
-						time.Sleep(op.wait)
-					}
-				case opStop:
-					manager.Stop()
+						content := newMockContent([]segment{
+							{duration: 10.0, uri: "test1.ts"},
+						})
+						if err := tc.manager.Add(content); err != nil {
+							tc.errChan <- err
+						}
+					}(i)
 				}
-			}
-			wg.Wait()
-
-			if manager.status != tt.expectState {
-				t.Errorf("status = %v, want %v", manager.status, tt.expectState)
-			}
-		})
-	}
-}
-
-func TestStreamManagerConcurrency(t *testing.T) {
-	tmpDir, cleanup := setupTest(t)
-	defer cleanup()
-
-	tests := []struct {
-		name        string
-		numAdd      int
-		addDelay    time.Duration
-		stopDelay   time.Duration
-		expectState Status
-	}{
-		{
-			name:        "複数の同時Add",
-			numAdd:      5,
-			addDelay:    1 * time.Millisecond,
-			stopDelay:   10 * time.Millisecond,
-			expectState: StatusStopped,
-		},
-		{
-			name:        "高頻度のAdd",
-			numAdd:      10,
-			addDelay:    1 * time.Millisecond,
-			stopDelay:   10 * time.Millisecond,
-			expectState: StatusStopped,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			manager := NewStreamM3U8Manager(tmpDir, filepath.Join(tmpDir, "stream.m3u8"))
-
-			// Run goroutine
-			var wg sync.WaitGroup
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				manager.Run()
-			}()
-
-			// Add operations
-			for i := 0; i < tt.numAdd; i++ {
-				wg.Add(1)
-				go func(id int) {
-					defer wg.Done()
-					time.Sleep(tt.addDelay)
-					manager.Add(content(*NewAudioContent(id+1, 10)))
-				}(i)
-			}
-
-			// Stop after delay
-			time.Sleep(tt.stopDelay)
-			manager.Stop()
-			wg.Wait()
-
-			if manager.status != tt.expectState {
-				t.Errorf("status = %v, want %v", manager.status, tt.expectState)
-			}
-		})
-	}
-}
-
-func TestStreamManagerEdgeCases(t *testing.T) {
-	tmpDir, cleanup := setupTest(t)
-	defer cleanup()
-
-	tests := []struct {
-		name        string
-		operation   func(*m3u8Manager)
-		expectState Status
-	}{
-		{
-			name: "Stop前のAdd",
-			operation: func(m *m3u8Manager) {
-				m.Add(content(*NewAudioContent(1, 10)))
-				// 状態チェックのために少し待つ
-				time.Sleep(100 * time.Millisecond)
-			},
-			expectState: StatusStreaming,
-		},
-		{
-			name: "二重Stop",
-			operation: func(m *m3u8Manager) {
-				// Stopを呼び出して完全に停止するまで待つ
-				m.Stop()
-				time.Sleep(100 * time.Millisecond)
-
-				// 2回目のStop
-				m.Stop()
-			},
-			expectState: StatusStopped,
-		},
-		{
-			name: "Stop後のAdd",
-			operation: func(m *m3u8Manager) {
-				m.Stop()
-				// Stop後のAddはエラーにならないが、処理されない
-				m.Add(content(*NewAudioContent(1, 10)))
-			},
-			expectState: StatusStopped,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			manager := NewStreamM3U8Manager(tmpDir, filepath.Join(tmpDir, "stream.m3u8"))
-
-			var wg sync.WaitGroup
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				manager.Run()
-			}()
-
-			time.Sleep(100 * time.Millisecond) // Run()の開始を待つ
-			tt.operation(manager)
-
-			if tt.expectState == StatusStopped {
 				wg.Wait()
-			} else {
-				// StatusStreamingを期待する場合は、即座にステータスをチェック
-				if manager.status != tt.expectState {
-					t.Errorf("status = %v, want %v", manager.status, tt.expectState)
+
+				select {
+				case err := <-tc.errChan:
+					return err
+				default:
+					return nil
 				}
-				manager.Stop()
-				wg.Wait()
-			}
+			},
+			verify: func(t *testing.T, tc *testContext) {
+				time.Sleep(300 * time.Millisecond) // 更新を待つ
+
+				updateCount := tc.playlist.GetUpdateCount()
+				if updateCount == 0 {
+					t.Error("no updates occurred")
+				}
+			},
+			timeout: 2 * time.Second,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runTestCase(t, tc)
 		})
 	}
 }
