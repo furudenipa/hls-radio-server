@@ -1,7 +1,7 @@
 services:
   goapp:
     build: ./go-server
-    container_name: goapp
+    container_name: goapp-svc
     expose:
       - "8080"
     volumes:
@@ -17,7 +17,7 @@ services:
     ports:
       - "8080:80"
     depends_on:
-      - goapp
+      - goapp-svc
     volumes:
       - ./radio_data:/srv/radio
     networks:
