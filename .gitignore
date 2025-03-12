@@ -1,15 +1,10 @@
-# contents
-/radio_data/contents/music/*/*.ts
-/radio_data/contents/voice/*/*.ts
-/radio_data/contents/music/*/*.m3u8
-/radio_data/contents/voice/*/*.m3u8
+# Radio Data
+/radio_data/
+!/radio_data/contents/index.json
 
-# station stream
-/radio_data/stations/*/*.m3u8
-
-# env
+# Environment
 .env
 
-# cline docs
+# Documentation
 /cline
 .clinerules
