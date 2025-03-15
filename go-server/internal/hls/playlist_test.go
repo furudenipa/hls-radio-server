@@ -151,6 +151,7 @@ func TestPlaylist_RemoveOldestSegment(t *testing.T) {
 		wantMediaSeq          int
 		wantDiscontinuitySeq  int
 		wantRemainingSegments int
+		wantErr               bool
 	}{
 		{
 			name: "remove normal segment",
@@ -161,6 +162,7 @@ func TestPlaylist_RemoveOldestSegment(t *testing.T) {
 			wantMediaSeq:          1,
 			wantDiscontinuitySeq:  0,
 			wantRemainingSegments: 1,
+			wantErr:               false,
 		},
 		{
 			name: "remove discontinuity segment",
@@ -171,6 +173,7 @@ func TestPlaylist_RemoveOldestSegment(t *testing.T) {
 			wantMediaSeq:          1,
 			wantDiscontinuitySeq:  1,
 			wantRemainingSegments: 1,
+			wantErr:               false,
 		},
 		{
 			name:                  "remove from empty playlist",
@@ -178,6 +181,7 @@ func TestPlaylist_RemoveOldestSegment(t *testing.T) {
 			wantMediaSeq:          0,
 			wantDiscontinuitySeq:  0,
 			wantRemainingSegments: 0,
+			wantErr:               true,
 		},
 	}
 
@@ -192,7 +196,14 @@ func TestPlaylist_RemoveOldestSegment(t *testing.T) {
 				_ = p.appendSegment(seg)
 			}
 
-			if err := p.removeOldestSegment(); err != nil {
+			err := p.removeOldestSegment()
+			if tt.wantErr {
+				if err == nil {
+					t.Error("removeOldestSegment() expected error for empty playlist")
+				}
+				return
+			}
+			if err != nil {
 				t.Errorf("removeOldestSegment() error = %v, want nil", err)
 			}
 
