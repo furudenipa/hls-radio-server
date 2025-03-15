@@ -16,13 +16,14 @@ type dj struct {
 	logic   logic
 }
 
-func (d *dj) Start() error {
+func (d *dj) Start() {
 	go d.manager.Run()
 
 	for {
 		content, err := d.logic.Choice()
 		if err != nil {
-			return err
+			slog.Error("failed to choose content", "error", err)
+			return
 		}
 
 		for {
@@ -41,7 +42,8 @@ func (d *dj) Start() error {
 				continue
 			}
 			// その他のエラーは即座に終了
-			return err
+			slog.Error("failed to add content", "error", err)
+			return
 		}
 	}
 }

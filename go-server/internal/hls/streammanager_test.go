@@ -153,7 +153,6 @@ type testCase struct {
 	setup   func(*testContext)
 	run     func(*testing.T, *testContext) error
 	verify  func(*testing.T, *testContext)
-	cleanup func(*testContext)
 	timeout time.Duration
 }
 
@@ -294,7 +293,9 @@ func TestPlaylistManager_Add(t *testing.T) {
 					{duration: 60.0, uri: "test1.ts"},
 					{duration: 60.0, uri: "test2.ts"},
 				})
-				tc.manager.Add(content)
+				if err := tc.manager.Add(content); err != nil {
+					t.Errorf("failed to add content: %v", err)
+				}
 			},
 			run: func(t *testing.T, tc *testContext) error {
 				content := newMockContent([]segment{

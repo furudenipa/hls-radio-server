@@ -192,7 +192,9 @@ func TestPlaylist_RemoveOldestSegment(t *testing.T) {
 				_ = p.appendSegment(seg)
 			}
 
-			p.removeOldestSegment()
+			if err := p.removeOldestSegment(); err != nil {
+				t.Errorf("removeOldestSegment() error = %v, want nil", err)
+			}
 
 			if p.metadata.mediaSequence != tt.wantMediaSeq {
 				t.Errorf("mediaSequence = %v, want %v", p.metadata.mediaSequence, tt.wantMediaSeq)
