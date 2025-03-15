@@ -44,7 +44,3 @@ func (s *segmentsQueue) pop() (segment, error) {
 	s.totalDuration -= seg.duration
 	return seg, nil
 }
-
-func (s *segmentsQueue) numSegments() int {
-	return len(s.segments)
-}

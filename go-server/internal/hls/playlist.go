@@ -16,10 +16,6 @@ type playlist struct {
 	segments []segment
 	config   PlaylistConfig
 
-	mediaSeqIndex  int
-	disconSeqIndex int
-	wait           float64
-
 	rwmu sync.RWMutex
 }
 
@@ -74,10 +70,14 @@ func (p *playlist) Update(seg segment) float64 {
 	p.rwmu.Lock()
 	defer p.rwmu.Unlock()
 	for len(p.segments) >= p.config.MaxSegments {
-		p.removeOldestSegment()
+		if err := p.removeOldestSegment(); err != nil {
+			return 0.0
+		}
 	}
 
-	p.appendSegment(seg)
+	if err := p.appendSegment(seg); err != nil {
+		return 0.0
+	}
 	if oldestSegment := p.segments[0]; len(p.segments) == p.config.MaxSegments {
 		return oldestSegment.duration
 	}

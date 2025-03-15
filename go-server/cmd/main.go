@@ -43,7 +43,10 @@ func main() {
 			http.Error(w, "Failed to format playlist", http.StatusInternalServerError)
 			return
 		}
-		w.Write(c.Bytes())
+		if _, err := w.Write(c.Bytes()); err != nil {
+			http.Error(w, "Failed to write response", http.StatusInternalServerError)
+			return
+		}
 	})
 
 	fmt.Println("Go server listening on :8080")

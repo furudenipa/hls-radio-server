@@ -1,0 +1,113 @@
+name: Build and Push
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'go-server/**'
+      - 'nginx/**'
+      - '.github/workflows/**'
+      - 'docker-compose.yaml'
+
+env:
+  REGISTRY: registry.furudenipa.org
+  GO_VERSION: '1.23'
+  TRIVY_SEVERITY: 'HIGH,CRITICAL'
+
+jobs:
+  verify:
+    name: Verify Code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        run: cd go-server && go mod tidy
+
+      - name: Run tests
+        run: cd go-server && go test ./internal/hls -v
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v3
+        with:
+          version: latest
+          working-directory: go-server
+
+  build-and-push:
+    name: Build and Push Images
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate version
+        id: version
+        run: |
+          VERSION="v$(date +'%Y%m%d')"
+          COUNT=$(git tag --list "$VERSION.*" | wc -l)
+          FULL_VERSION="$VERSION.$((COUNT + 1))"
+          echo "version=$FULL_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Build and Push Go Server
+        uses: docker/build-push-action@v5
+        with:
+          context: ./go-server
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/go-server:latest
+            ${{ env.REGISTRY }}/go-server:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/go-server:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and Push Nginx
+        uses: docker/build-push-action@v5
+        with:
+          context: ./nginx
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/nginx-server:latest
+            ${{ env.REGISTRY }}/nginx-server:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/nginx-server:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Trivy Scan (Go Server)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.REGISTRY }}/go-server:${{ steps.version.outputs.version }}'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: ${{ env.TRIVY_SEVERITY }}
+
+      - name: Upload Scan Results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Create Git Tag
+        run: |
+          git tag ${{ steps.version.outputs.version }}
+          git push origin ${{ steps.version.outputs.version }}
