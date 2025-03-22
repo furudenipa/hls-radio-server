@@ -44,6 +44,8 @@ jobs:
     name: Build and Push Images
     needs: verify
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -94,3 +96,40 @@ jobs:
         run: |
           git tag ${{ steps.version.outputs.version }}
           git push origin ${{ steps.version.outputs.version }}
+
+  update-manifest:
+    name: Update Manifest Repository
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install yq
+        run: |
+          wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
+
+      - name: Check out manifest repository
+        uses: actions/checkout@v4
+        with:
+          repository: furudenipa/hls-radio-server-manifest
+          token: ${{ secrets.PAT_TOKEN }}
+          path: manifest
+
+      - name: Update image tags
+        run: |
+          cd manifest
+          yq -i '.spec.template.spec.containers[0].image = "${{ env.REGISTRY }}/go-server:${{ needs.build-and-push.outputs.version }}"' goapp-deployment.yaml
+          yq -i '.spec.template.spec.containers[0].image = "${{ env.REGISTRY }}/nginx-server:${{ needs.build-and-push.outputs.version }}"' nginx-deployment.yaml
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+          path: manifest
+          commit-message: "Update image tags to ${{ needs.build-and-push.outputs.version }}"
+          title: "Update image tags to ${{ needs.build-and-push.outputs.version }}"
+          body: |
+            Updates image tags to match the latest build:
+            - go-server: ${{ needs.build-and-push.outputs.version }}
+            - nginx-server: ${{ needs.build-and-push.outputs.version }}
+          branch: update-image-tags
+          base: main
